@@ -214,3 +214,4 @@ sudo systemctl status cosmandbot
 ## 📄 Licence
 
 Ce projet est sous licence [MIT](LICENSE).
+

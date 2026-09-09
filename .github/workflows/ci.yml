@@ -29,3 +29,4 @@ jobs:
       - name: Verify Python Syntax
         run: |
           python -m py_compile main.py db.py utils/*.py cogs/*.py
+

@@ -50,9 +50,13 @@ CREATE TABLE IF NOT EXISTS conventions (
     role_id BIGINT NOT NULL,
     title VARCHAR(150) NOT NULL,
     role_name VARCHAR(100) NOT NULL,
+    role_prefix VARCHAR(100) NULL,
     location VARCHAR(255) NOT NULL,
     description TEXT NULL,
     days_json TEXT NOT NULL,
+    dedicated_channel_id BIGINT NULL,
+    meetup_days_json TEXT NULL,
+    meetup_roles_json TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_conv_guild (guild_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -109,3 +113,4 @@ CREATE TABLE IF NOT EXISTS daily_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_daily_guild (guild_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

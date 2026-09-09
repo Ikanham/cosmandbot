@@ -126,9 +126,13 @@ async def init_db_indexes():
             role_id BIGINT NOT NULL,
             title VARCHAR(150) NOT NULL,
             role_name VARCHAR(100) NOT NULL,
+            role_prefix VARCHAR(100) NULL,
             location VARCHAR(255) NOT NULL,
             description TEXT NULL,
             days_json TEXT NOT NULL,
+            dedicated_channel_id BIGINT NULL,
+            meetup_days_json TEXT NULL,
+            meetup_roles_json TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_guild (guild_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -158,6 +162,10 @@ async def init_db_indexes():
         "ALTER TABLE event_participants ADD UNIQUE KEY uk_event_user (event_id, user_id)",
         "ALTER TABLE birthdays ADD INDEX idx_birthdays_date (guild_id, date)",
         "ALTER TABLE countdowns ADD INDEX idx_countdowns_guild (guild_id, event_date)",
+        "ALTER TABLE conventions ADD COLUMN dedicated_channel_id BIGINT NULL",
+        "ALTER TABLE conventions ADD COLUMN role_prefix VARCHAR(100) NULL",
+        "ALTER TABLE conventions ADD COLUMN meetup_days_json TEXT NULL",
+        "ALTER TABLE conventions ADD COLUMN meetup_roles_json TEXT NULL",
     ]
     for q in alter_queries:
         try:
