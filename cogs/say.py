@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -8,6 +9,29 @@ from utils.permissions import can_manage
 logger = logging.getLogger("Say")
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 Mo (limite standard Discord)
+
+
+def resolve_emojis(guild: discord.Guild, text: str) -> str:
+    """Remplace les codes :nom_emoji: par les vraies balises Discord d'émojis du serveur."""
+    if not text or ":" not in text or not guild:
+        return text
+
+    emoji_map = {}
+    for e in guild.emojis:
+        emoji_map[e.name.lower()] = str(e)
+
+    if hasattr(guild, "_state") and hasattr(guild._state, "emojis"):
+        for e in guild._state.emojis:
+            if e.name.lower() not in emoji_map:
+                emoji_map[e.name.lower()] = str(e)
+
+    pattern = r"(?<!<a)(?<!<):([a-zA-Z0-9_]+):"
+
+    def repl(m):
+        name = m.group(1).lower()
+        return emoji_map.get(name, m.group(0))
+
+    return re.sub(pattern, repl, text)
 
 
 async def send_cloned_message(
@@ -48,6 +72,9 @@ async def send_cloned_message(
             if f"@{role.name}" in content and role.name != "@everyone":
                 if role.mentionable or can_mention_everyone or author.guild_permissions.administrator:
                     content = content.replace(f"@{role.name}", role.mention)
+
+        # Résolution des émojis personnalisés du serveur
+        content = resolve_emojis(guild, content)
 
     allowed = discord.AllowedMentions(
         roles=True,

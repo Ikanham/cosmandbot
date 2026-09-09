@@ -56,8 +56,9 @@ class HelpCog(commands.Cog, name="Help"):
             embed.add_field(
                 name="🎭 Conventions Cosplay",
                 value=(
-                    "`/convention creer [#salon]` — Créer un panneau interactif avec sélection des jours et rôle automatique\n"
-                    "`/convention archiver [id]` — Clôturer une convention et supprimer son rôle\n"
+                    "`/convention creer [#salon]` — Créer une convention (sélection jours, salon dédié, rôles)\n"
+                    "`/convention actualiser [id]` — Réparer et synchroniser l'affichage (émojis, mentions)\n"
+                    "`/convention archiver [id]` — Clôturer une convention, supprimer salon et rôles\n"
                     "`/convention liste` — Lister les conventions cosplay actives"
                 ),
                 inline=False,

@@ -48,6 +48,32 @@ def resolve_mentions(guild: discord.Guild, text: str) -> str:
     return text
 
 
+def resolve_emojis(guild: discord.Guild, text: str) -> str:
+    """
+    Remplace les codes d'émojis personnalisés :nom_emoji: par la vraie balise Discord <:nom:id> ou <a:nom:id>.
+    Cherche en priorité dans les émojis du serveur actuel, puis dans les émojis globaux accessibles au bot.
+    """
+    if not text or ":" not in text:
+        return text
+
+    emoji_map = {}
+    for e in guild.emojis:
+        emoji_map[e.name.lower()] = str(e)
+
+    if hasattr(guild, "_state") and hasattr(guild._state, "emojis"):
+        for e in guild._state.emojis:
+            if e.name.lower() not in emoji_map:
+                emoji_map[e.name.lower()] = str(e)
+
+    pattern = r"(?<!<a)(?<!<):([a-zA-Z0-9_]+):"
+
+    def replace_emoji(match):
+        emoji_name = match.group(1).lower()
+        return emoji_map.get(emoji_name, match.group(0))
+
+    return re.sub(pattern, replace_emoji, text)
+
+
 def parse_convention_days(raw_input: str) -> tuple[list[str], list[str]]:
     """
     Découpe la saisie des jours et identifie les jours de rassemblement (* ou '(rassemblement)').
@@ -688,6 +714,9 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
         resolved_annonce = (
             resolve_mentions(guild, raw_annonce) if raw_annonce else ""
         )
+        resolved_annonce = (
+            resolve_emojis(guild, resolved_annonce) if resolved_annonce else ""
+        )
         chunks = (
             split_message_content(resolved_annonce, max_chars=1950)
             if resolved_annonce
@@ -1007,6 +1036,128 @@ class ConventionsCog(commands.Cog, name="Conventions"):
 
         await interaction.followup.send(
             f"🗑️ La convention **{conv['title']}**, son salon dédié et tous ses rôles associés ont été archivés et supprimés avec succès.",
+            ephemeral=True,
+        )
+
+    @convention_group.command(
+        name="actualiser",
+        description="Réparer et actualiser l'affichage (émojis de serveur, mentions) d'une convention.",
+    )
+    @can_manage()
+    @app_commands.describe(
+        convention_id="Convention à actualiser (optionnel, par défaut la plus récente)"
+    )
+    @app_commands.autocomplete(convention_id=convention_autocomplete)
+    async def actualiser_convention(
+        self, interaction: discord.Interaction, convention_id: int = None
+    ):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+
+        if convention_id:
+            conv = await fetchone(
+                "SELECT * FROM conventions WHERE id=%s AND guild_id=%s",
+                (convention_id, guild.id),
+            )
+        else:
+            conv = await fetchone(
+                "SELECT * FROM conventions WHERE guild_id=%s ORDER BY id DESC LIMIT 1",
+                (guild.id,),
+            )
+
+        if not conv:
+            await interaction.followup.send(
+                "❌ Aucune convention trouvée sur ce serveur.", ephemeral=True
+            )
+            return
+
+        channel = guild.get_channel(int(conv["channel_id"]))
+        if not channel:
+            await interaction.followup.send(
+                f"❌ Salon d'annonce introuvable (<#{conv['channel_id']}>).",
+                ephemeral=True,
+            )
+            return
+
+        # Récupérer l'annonce brute existante
+        raw_annonce = conv.get("description") or ""
+
+        # Réparer les mentions et les émojis de serveur
+        new_annonce = resolve_mentions(guild, raw_annonce)
+        new_annonce = resolve_emojis(guild, new_annonce)
+
+        chunks = (
+            split_message_content(new_annonce, max_chars=1950)
+            if new_annonce
+            else []
+        )
+
+        allowed = discord.AllowedMentions(
+            everyone=interaction.user.guild_permissions.mention_everyone,
+            roles=True,
+            users=True,
+        )
+
+        extra_msg_ids = json.loads(conv.get("extra_messages_json") or "[]")
+
+        # Mise à jour des messages préliminaires éventuels
+        if len(chunks) > 1:
+            for idx, c in enumerate(chunks[:-1]):
+                if idx < len(extra_msg_ids):
+                    try:
+                        em = await channel.fetch_message(extra_msg_ids[idx])
+                        await em.edit(content=c, allowed_mentions=allowed)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        pass
+                else:
+                    try:
+                        em = await channel.send(content=c, allowed_mentions=allowed)
+                        extra_msg_ids.append(em.id)
+                    except discord.HTTPException:
+                        pass
+            main_content = chunks[-1]
+        elif len(chunks) == 1:
+            main_content = chunks[0]
+        else:
+            main_content = None
+
+        # Récupérer le message interactif principal
+        try:
+            msg = await channel.fetch_message(int(conv["message_id"]))
+        except (discord.NotFound, discord.Forbidden):
+            await interaction.followup.send(
+                "❌ Le message d'annonce principal de la convention n'a pas été trouvé sur Discord.",
+                ephemeral=True,
+            )
+            return
+
+        participants = await fetchall(
+            "SELECT user_id, day_name FROM convention_participants WHERE convention_id=%s ORDER BY id ASC",
+            (conv["id"],),
+        )
+        main_role = guild.get_role(int(conv["role_id"]))
+        days_list = json.loads(conv["days_json"])
+        view = ConventionView(conv["id"], days_list)
+        embed = build_convention_embed(conv, participants, main_role, guild)
+
+        try:
+            await msg.edit(content=main_content, embed=embed, view=view)
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"❌ Erreur lors de la mise à jour du message Discord : {e}",
+                ephemeral=True,
+            )
+            return
+
+        # Sauvegarder la nouvelle description et les IDs des messages en BDD
+        await execute(
+            "UPDATE conventions SET description=%s, extra_messages_json=%s WHERE id=%s",
+            (new_annonce, json.dumps(extra_msg_ids), conv["id"]),
+        )
+
+        await interaction.followup.send(
+            f"✅ La convention **{conv['title']}** a été actualisée avec succès !\n"
+            f"Les émojis du serveur et les mentions ont été réparés.",
             ephemeral=True,
         )
 
