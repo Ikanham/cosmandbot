@@ -86,6 +86,36 @@ def parse_convention_days(raw_input: str) -> tuple[list[str], list[str]]:
     return days, meetup_days
 
 
+def split_message_content(text: str, max_chars: int = 1950) -> list[str]:
+    """
+    Découpe un texte en plusieurs morceaux de taille inférieure ou égale à max_chars,
+    en privilégiant les coupures sur les sauts de ligne ou les espaces pour ne pas tronquer les phrases.
+    """
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while len(remaining) > max_chars:
+        split_idx = remaining.rfind("\n\n", 0, max_chars)
+        if split_idx == -1 or split_idx < max_chars // 2:
+            split_idx = remaining.rfind("\n", 0, max_chars)
+        if split_idx == -1 or split_idx < max_chars // 2:
+            split_idx = remaining.rfind(" ", 0, max_chars)
+        if split_idx == -1:
+            split_idx = max_chars
+
+        chunks.append(remaining[:split_idx].strip())
+        remaining = remaining[split_idx:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
 def slugify_channel_name(name: str) -> str:
     """Génère un nom de salon Discord propre à partir du nom de la convention."""
     cleaned = re.sub(r"[^a-zA-Z0-9à-ÿÀ-Ý]+", "-", name.lower()).strip("-")
@@ -205,10 +235,9 @@ async def update_convention_embed(guild: discord.Guild, conv_id: int):
     days_list = json.loads(conv["days_json"])
     view = ConventionView(conv_id, days_list)
     embed = build_convention_embed(conv, participants, role, guild)
-    content = conv.get("description") or None
 
     try:
-        await message.edit(content=content, embed=embed, view=view)
+        await message.edit(embed=embed, view=view)
     except discord.HTTPException as e:
         logger.error(
             f"Erreur lors de la mise à jour de l'embed convention #{conv_id} : {e}"
@@ -511,7 +540,7 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
         style=discord.TextStyle.paragraph,
         placeholder="Ex: **Préparez vos cosplays !** @everyone\nRassemblement prévu le samedi !",
         required=False,
-        max_length=1500,
+        max_length=4000,
     )
 
     def __init__(self, bot, target_channel: discord.TextChannel):
@@ -650,7 +679,7 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
         except discord.HTTPException:
             pass
 
-        # 4. Résolution intelligente des mentions dans le texte d'annonce
+        # 4. Résolution intelligente des mentions dans le texte d'annonce et découpage si > 1950 caractères
         raw_annonce = (
             self.annonce.value.strip()
             if (self.annonce.value and self.annonce.value.strip())
@@ -659,18 +688,65 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
         resolved_annonce = (
             resolve_mentions(guild, raw_annonce) if raw_annonce else ""
         )
+        chunks = (
+            split_message_content(resolved_annonce, max_chars=1950)
+            if resolved_annonce
+            else []
+        )
+
+        allowed = discord.AllowedMentions(
+            everyone=interaction.user.guild_permissions.mention_everyone,
+            roles=True,
+            users=True,
+        )
+
+        extra_msg_ids = []
+        if len(chunks) > 1:
+            try:
+                for c in chunks[:-1]:
+                    extra_m = await self.target_channel.send(
+                        content=c, allowed_mentions=allowed
+                    )
+                    extra_msg_ids.append(extra_m.id)
+                main_content = chunks[-1]
+            except (discord.Forbidden, discord.HTTPException) as e:
+                for mid in extra_msg_ids:
+                    try:
+                        m = await self.target_channel.fetch_message(mid)
+                        await m.delete()
+                    except discord.HTTPException:
+                        pass
+                for r in created_roles:
+                    try:
+                        await r.delete()
+                    except discord.HTTPException:
+                        pass
+                try:
+                    await dedicated_channel.delete()
+                except discord.HTTPException:
+                    pass
+                await interaction.followup.send(
+                    f"❌ Impossible d'envoyer l'annonce dans {self.target_channel.mention} : {e}",
+                    ephemeral=True,
+                )
+                return
+        elif len(chunks) == 1:
+            main_content = chunks[0]
+        else:
+            main_content = None
 
         days_json = json.dumps(days, ensure_ascii=False)
         meetup_days_json = json.dumps(meetup_days, ensure_ascii=False)
         meetup_roles_json = json.dumps(meetup_roles, ensure_ascii=False)
+        extra_messages_json = json.dumps(extra_msg_ids, ensure_ascii=False)
 
         # 5. Enregistrement en base de données
         conv_id = await execute(
             """
             INSERT INTO conventions (
                 guild_id, channel_id, message_id, role_id, title, role_name, role_prefix,
-                location, description, days_json, dedicated_channel_id, meetup_days_json, meetup_roles_json
-            ) VALUES (%s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                location, description, days_json, dedicated_channel_id, meetup_days_json, meetup_roles_json, extra_messages_json
+            ) VALUES (%s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 guild.id,
@@ -685,6 +761,7 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
                 dedicated_channel.id,
                 meetup_days_json,
                 meetup_roles_json,
+                extra_messages_json,
             ),
         )
 
@@ -698,27 +775,27 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
             "dedicated_channel_id": dedicated_channel.id,
             "meetup_days_json": meetup_days_json,
             "meetup_roles_json": meetup_roles_json,
+            "extra_messages_json": extra_messages_json,
         }
 
-        # 6. Création de l'Embed et publication de l'annonce
+        # 6. Création de l'Embed et publication de l'annonce interactive
         embed = build_convention_embed(conv_data, [], main_role, guild)
         view = ConventionView(conv_id, days)
-        annonce_content = resolved_annonce if resolved_annonce else None
-
-        allowed = discord.AllowedMentions(
-            everyone=interaction.user.guild_permissions.mention_everyone,
-            roles=True,
-            users=True,
-        )
 
         try:
             msg = await self.target_channel.send(
-                content=annonce_content,
+                content=main_content,
                 embed=embed,
                 view=view,
                 allowed_mentions=allowed,
             )
         except (discord.Forbidden, discord.HTTPException) as e:
+            for mid in extra_msg_ids:
+                try:
+                    m = await self.target_channel.fetch_message(mid)
+                    await m.delete()
+                except discord.HTTPException:
+                    pass
             await execute("DELETE FROM conventions WHERE id=%s", (conv_id,))
             for r in created_roles:
                 try:
@@ -730,7 +807,7 @@ class ConventionModal(discord.ui.Modal, title="Nouvelle Convention Cosplay"):
             except discord.HTTPException:
                 pass
             await interaction.followup.send(
-                f"❌ Impossible d'envoyer le message dans {self.target_channel.mention} : {e}",
+                f"❌ Impossible d'envoyer le message interactif dans {self.target_channel.mention} : {e}",
                 ephemeral=True,
             )
             return
@@ -905,9 +982,16 @@ class ConventionsCog(commands.Cog, name="Conventions"):
                 except discord.HTTPException:
                     pass
 
-        # 4. Supprimer le message d'annonce si possible
+        # 4. Supprimer les messages d'annonce (principal et préliminaires)
         channel = interaction.guild.get_channel(int(conv["channel_id"]))
         if channel:
+            extra_msg_ids = json.loads(conv.get("extra_messages_json") or "[]")
+            for mid in extra_msg_ids:
+                try:
+                    m = await channel.fetch_message(int(mid))
+                    await m.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
             try:
                 msg = await channel.fetch_message(int(conv["message_id"]))
                 await msg.delete()

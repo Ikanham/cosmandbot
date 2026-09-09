@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS conventions (
     dedicated_channel_id BIGINT NULL,
     meetup_days_json TEXT NULL,
     meetup_roles_json TEXT NULL,
+    extra_messages_json TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_conv_guild (guild_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

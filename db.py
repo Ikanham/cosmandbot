@@ -133,6 +133,7 @@ async def init_db_indexes():
             dedicated_channel_id BIGINT NULL,
             meetup_days_json TEXT NULL,
             meetup_roles_json TEXT NULL,
+            extra_messages_json TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX idx_guild (guild_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -166,6 +167,7 @@ async def init_db_indexes():
         "ALTER TABLE conventions ADD COLUMN role_prefix VARCHAR(100) NULL",
         "ALTER TABLE conventions ADD COLUMN meetup_days_json TEXT NULL",
         "ALTER TABLE conventions ADD COLUMN meetup_roles_json TEXT NULL",
+        "ALTER TABLE conventions ADD COLUMN extra_messages_json TEXT NULL",
     ]
     for q in alter_queries:
         try:
